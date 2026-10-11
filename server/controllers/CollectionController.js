@@ -1,11 +1,15 @@
 const { Request, Response, NextFunction } = require('express')
 const Sequelize = require('sequelize')
+const fs = require('../libs/fsExtra')
 const Logger = require('../Logger')
 const SocketAuthority = require('../SocketAuthority')
 const Database = require('../Database')
 const htmlSanitizer = require('../utils/htmlSanitizer')
+const { reqSupportsWebp, clampPositiveInt } = require('../utils/index')
 
 const RssFeedManager = require('../managers/RssFeedManager')
+const CacheManager = require('../managers/CacheManager')
+const CoverManager = require('../managers/CoverManager')
 
 /**
  * @typedef RequestUserObject
@@ -219,6 +223,10 @@ class CollectionController {
 
     await req.collection.destroy()
 
+    if (req.collection.coverPath) {
+      await CoverManager.removeCollectionCover(req.collection.id)
+    }
+
     SocketAuthority.emitter('collection_removed', jsonExpanded)
     res.sendStatus(200)
   }
@@ -425,6 +433,103 @@ class CollectionController {
   }
 
   /**
+   * POST: /api/collections/:id/cover
+   * Set a custom collection cover from an uploaded file (multipart "cover") or from a url (req.body.url)
+   *
+   * @param {CollectionControllerRequest} req
+   * @param {Response} res
+   */
+  async uploadCover(req, res) {
+    if (!req.user.canUpload) {
+      Logger.warn(`[CollectionController] User "${req.user.username}" attempted to upload a cover without permission`)
+      return res.sendStatus(403)
+    }
+
+    let result = null
+    if (req.body?.url) {
+      if (typeof req.body.url !== 'string' || (!req.body.url.startsWith('http:') && !req.body.url.startsWith('https:'))) {
+        return res.status(400).send('Invalid request url')
+      }
+      Logger.debug(`[CollectionController] Requesting download cover from url "${req.body.url}"`)
+      result = await CoverManager.saveCollectionCover(req.collection.id, { url: req.body.url })
+    } else if (req.files?.cover) {
+      Logger.debug(`[CollectionController] Handling uploaded cover`)
+      result = await CoverManager.saveCollectionCover(req.collection.id, { file: req.files.cover })
+    } else {
+      return res.status(400).send('Invalid request no file or url')
+    }
+
+    if (result?.error) {
+      return res.status(400).send(result.error)
+    } else if (!result?.cover) {
+      return res.status(500).send('Unknown error occurred')
+    }
+
+    req.collection.coverPath = result.cover
+    // coverPath may not have changed, but updatedAt is used by clients to bust the image cache
+    req.collection.changed('coverPath', true)
+    await req.collection.save()
+
+    const jsonExpanded = await req.collection.getOldJsonExpanded()
+    SocketAuthority.emitter('collection_updated', jsonExpanded)
+    res.json({
+      success: true,
+      cover: result.cover
+    })
+  }
+
+  /**
+   * DELETE: /api/collections/:id/cover
+   * Remove custom collection cover
+   *
+   * @param {CollectionControllerRequest} req
+   * @param {Response} res
+   */
+  async removeCover(req, res) {
+    if (req.collection.coverPath) {
+      await CoverManager.removeCollectionCover(req.collection.id)
+
+      req.collection.coverPath = null
+      await req.collection.save()
+
+      const jsonExpanded = await req.collection.getOldJsonExpanded()
+      SocketAuthority.emitter('collection_updated', jsonExpanded)
+    }
+
+    res.sendStatus(200)
+  }
+
+  /**
+   * GET: /api/collections/:id/cover
+   * Get custom collection cover
+   *
+   * @param {Request} req
+   * @param {Response} res
+   */
+  async getCover(req, res) {
+    const {
+      query: { width, height, format, raw }
+    } = req
+
+    if (req.query.ts) res.set('Cache-Control', 'private, max-age=86400')
+
+    if (raw) {
+      const collection = await Database.collectionModel.findByPk(req.params.id, { attributes: ['coverPath'] })
+      if (!collection?.coverPath || !(await fs.pathExists(collection.coverPath))) {
+        return res.sendStatus(404)
+      }
+      return res.sendFile(collection.coverPath)
+    }
+
+    const options = {
+      format: format || (reqSupportsWebp(req) ? 'webp' : 'jpeg'),
+      height: clampPositiveInt(height ? parseInt(height) : null, 4096),
+      width: clampPositiveInt(width ? parseInt(width) : null, 4096)
+    }
+    return CacheManager.handleCollectionCoverCache(res, req.params.id, options)
+  }
+
+  /**
    *
    * @param {RequestWithUser} req
    * @param {Response} res
@@ -443,11 +548,12 @@ class CollectionController {
       req.collection = collection
     }
 
-    // Users with update permission can remove books from collections
-    if (req.method == 'DELETE' && !req.params.bookId && !req.user.canDelete) {
+    // Users with update permission can remove books and the cover from collections
+    const isRemovingCover = req.method == 'DELETE' && req.path.endsWith('/cover')
+    if (req.method == 'DELETE' && !req.params.bookId && !isRemovingCover && !req.user.canDelete) {
       Logger.warn(`[CollectionController] User "${req.user.username}" attempted to delete without permission`)
       return res.sendStatus(403)
-    } else if ((req.method == 'PATCH' || req.method == 'POST') && !req.user.canUpdate) {
+    } else if ((req.method == 'PATCH' || req.method == 'POST' || isRemovingCover) && !req.user.canUpdate) {
       Logger.warn(`[CollectionController] User "${req.user.username}" attempted to update without permission`)
       return res.sendStatus(403)
     }

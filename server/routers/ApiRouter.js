@@ -152,6 +152,9 @@ class ApiRouter {
     this.router.delete('/collections/:id/book/:bookId', CollectionController.middleware.bind(this), CollectionController.removeBook.bind(this))
     this.router.post('/collections/:id/batch/add', CollectionController.middleware.bind(this), CollectionController.addBatch.bind(this))
     this.router.post('/collections/:id/batch/remove', CollectionController.middleware.bind(this), CollectionController.removeBatch.bind(this))
+    this.router.get('/collections/:id/cover', CollectionController.getCover.bind(this))
+    this.router.post('/collections/:id/cover', CollectionController.middleware.bind(this), CollectionController.uploadCover.bind(this))
+    this.router.delete('/collections/:id/cover', CollectionController.middleware.bind(this), CollectionController.removeCover.bind(this))
 
     //
     // Playlist Routes

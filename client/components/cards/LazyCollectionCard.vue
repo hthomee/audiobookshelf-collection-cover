@@ -3,7 +3,7 @@
     <div class="relative" :style="{ height: coverHeight + 'px' }">
       <div class="absolute top-0 left-0 w-full box-shadow-book shadow-height" />
       <div class="w-full h-full bg-primary relative rounded-sm overflow-hidden">
-        <covers-collection-cover ref="cover" :book-items="books" :width="cardWidth" :height="coverHeight" :book-cover-aspect-ratio="bookCoverAspectRatio" />
+        <covers-collection-cover ref="cover" :book-items="books" :collection="collection" :width="cardWidth" :height="coverHeight" :book-cover-aspect-ratio="bookCoverAspectRatio" />
       </div>
       <div v-show="isHovering && userCanUpdate" class="w-full h-full absolute top-0 left-0 z-10 bg-black/40 pointer-events-none">
         <div class="absolute pointer-events-auto" :style="{ top: 0.5 + 'em', right: 0.5 + 'em' }" @click.stop.prevent="clickEdit">

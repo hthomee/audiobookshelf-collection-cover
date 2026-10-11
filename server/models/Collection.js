@@ -10,6 +10,8 @@ class Collection extends Model {
     this.name
     /** @type {string} */
     this.description
+    /** @type {string} */
+    this.coverPath
     /** @type {UUIDV4} */
     this.libraryId
     /** @type {Date} */
@@ -170,7 +172,8 @@ class Collection extends Model {
           primaryKey: true
         },
         name: DataTypes.STRING,
-        description: DataTypes.TEXT
+        description: DataTypes.TEXT,
+        coverPath: DataTypes.STRING
       },
       {
         sequelize,
@@ -266,6 +269,7 @@ class Collection extends Model {
       libraryId: this.libraryId,
       name: this.name,
       description: this.description,
+      coverPath: this.coverPath || null,
       books: [...libraryItemIds],
       lastUpdate: this.updatedAt.valueOf(),
       createdAt: this.createdAt.valueOf()
