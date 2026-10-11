@@ -71,6 +71,12 @@
         <!-- series sort select -->
         <controls-sort-select v-if="isSeriesPage && !isBatchSelecting" v-model="settings.seriesSortBy" :descending.sync="settings.seriesSortDesc" :items="seriesSortItems" class="w-36 sm:w-44 md:w-48 h-7.5 ml-1 sm:ml-4" @change="updateSeriesSort" />
 
+        <!-- collections page new collection button -->
+        <ui-btn v-if="isCollectionsPage && userCanUpdate && !isBatchSelecting" color="bg-success" small class="ml-2 flex items-center" @click="showNewCollectionModal = true">
+          <span class="material-symbols text-lg mr-1">add</span>
+          {{ $strings.ButtonNewCollection }}
+        </ui-btn>
+
         <!-- issues page remove all button -->
         <ui-btn v-if="isIssuesFilter && userCanDelete && !isBatchSelecting" :loading="processingIssues" color="bg-error" small class="ml-4" @click="removeAllIssues">{{ $strings.ButtonRemoveAll }} {{ $formatNumber(numShowing) }} {{ entityName }}</ui-btn>
 
@@ -99,6 +105,8 @@
         <ui-context-menu-dropdown v-if="contextMenuItems.length" :items="contextMenuItems" :menu-width="110" class="ml-2" @action="contextMenuAction" />
       </template>
     </div>
+
+    <modals-collections-new-collection-modal v-if="isCollectionsPage" v-model="showNewCollectionModal" />
   </div>
 </template>
 
@@ -115,6 +123,7 @@ export default {
   },
   data() {
     return {
+      showNewCollectionModal: false,
       settings: {},
       hasInit: false,
       totalEntities: 0,

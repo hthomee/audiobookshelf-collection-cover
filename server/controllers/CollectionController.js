@@ -49,10 +49,8 @@ class CollectionController {
       Logger.warn(`[CollectionController] User "${req.user.username}" attempted to create collection in inaccessible library ${reqBody.libraryId}`)
       return res.sendStatus(403)
     }
+    // Collections can be created without books
     const libraryItemIds = (reqBody.books || []).filter((b) => !!b && typeof b == 'string')
-    if (!libraryItemIds.length) {
-      return res.status(400).send('Invalid collection data. No books')
-    }
 
     // Load library items
     const libraryItems = await Database.libraryItemModel.findAll({
@@ -83,15 +81,17 @@ class CollectionController {
       )
 
       // Create collectionBooks
-      const collectionBookPayloads = libraryItemIds.map((llid, index) => {
-        const libraryItem = libraryItems.find((li) => li.id === llid)
-        return {
-          collectionId: newCollection.id,
-          bookId: libraryItem.mediaId,
-          order: index + 1
-        }
-      })
-      await Database.collectionBookModel.bulkCreate(collectionBookPayloads, { transaction })
+      if (libraryItemIds.length) {
+        const collectionBookPayloads = libraryItemIds.map((llid, index) => {
+          const libraryItem = libraryItems.find((li) => li.id === llid)
+          return {
+            collectionId: newCollection.id,
+            bookId: libraryItem.mediaId,
+            order: index + 1
+          }
+        })
+        await Database.collectionBookModel.bulkCreate(collectionBookPayloads, { transaction })
+      }
 
       await transaction.commit()
     } catch (error) {
