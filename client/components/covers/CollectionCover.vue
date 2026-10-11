@@ -5,8 +5,8 @@
     </div> -->
 
     <div v-if="hasOwnCover" class="w-full h-full relative rounded-xs">
-      <div v-if="showCoverBg" class="bg-primary absolute top-0 left-0 w-full h-full">
-        <div class="w-full h-full z-0" ref="coverBg" />
+      <div v-show="showCoverBg" class="bg-primary absolute top-0 left-0 w-full h-full overflow-hidden">
+        <div class="absolute cover-bg" ref="coverBg" />
       </div>
       <img ref="cover" :src="fullCoverUrl" @error="imageError" @load="imageLoaded" class="w-full h-full absolute top-0 left-0" :class="showCoverBg ? 'object-contain' : 'object-cover'" />
     </div>
@@ -31,6 +31,10 @@ export default {
       type: Array,
       default: () => []
     },
+    collection: {
+      type: Object,
+      default: () => null
+    },
     width: Number,
     height: Number,
     bookCoverAspectRatio: Number
@@ -47,18 +51,44 @@ export default {
       return this.width / 240
     },
     hasOwnCover() {
-      return false
+      return !!this.collection?.coverPath && !this.imageFailed
     },
     fullCoverUrl() {
-      return null
+      if (!this.collection?.coverPath) return null
+      const store = this.$store || this.$nuxt.$store
+      return `${store.state.routerBasePath}/api/collections/${this.collection.id}/cover?ts=${this.collection.lastUpdate}`
     },
     books() {
       return this.bookItems || []
     }
   },
+  watch: {
+    fullCoverUrl() {
+      this.imageFailed = false
+    }
+  },
   methods: {
-    imageError() {},
-    imageLoaded() {}
+    imageError(err) {
+      console.error('Failed to load collection cover', err)
+      // Fall back to the book covers
+      this.imageFailed = true
+    },
+    imageLoaded() {
+      if (!this.$refs.cover) return
+      const { naturalWidth, naturalHeight } = this.$refs.cover
+      const aspectRatio = naturalHeight / naturalWidth
+      const containerAspectRatio = this.height / this.width
+
+      // Show blurred background with contained image if the cover does not fit the collection aspect ratio
+      if (Math.abs(aspectRatio - containerAspectRatio) > 0.15) {
+        this.showCoverBg = true
+        this.$nextTick(() => {
+          if (this.$refs.coverBg) this.$refs.coverBg.style.backgroundImage = `url("${this.fullCoverUrl}")`
+        })
+      } else {
+        this.showCoverBg = false
+      }
+    }
   },
   mounted() {}
 }

@@ -9,8 +9,12 @@
       <template v-if="!showImageUploader">
         <form @submit.prevent="submitForm">
           <div class="flex flex-wrap">
-            <div class="w-full flex justify-center mb-2 md:w-auto md:mb-0 md:block">
-              <covers-collection-cover :book-items="books" :width="200" :height="100 * bookCoverAspectRatio" :book-cover-aspect-ratio="bookCoverAspectRatio" />
+            <div class="w-full flex flex-col items-center mb-2 md:w-auto md:mb-0 md:block">
+              <covers-collection-cover :book-items="books" :collection="currentCollection" :width="200" :height="100 * bookCoverAspectRatio" :book-cover-aspect-ratio="bookCoverAspectRatio" />
+              <ui-btn small type="button" class="mt-2 w-full flex items-center justify-center" @click="showImageUploader = true">
+                <span class="material-symbols text-lg mr-1">image</span>
+                {{ $strings.LabelCover }}
+              </ui-btn>
             </div>
             <div class="grow px-4">
               <ui-text-input-with-label v-model="newCollectionName" :label="$strings.LabelName" class="mb-2" />
@@ -30,14 +34,36 @@
           <div class="hover:bg-white/10 cursor-pointer h-11 w-11 flex items-center justify-center rounded-full" @click="showImageUploader = false">
             <span class="material-symbols text-4xl">arrow_back</span>
           </div>
-          <p class="ml-2 text-xl mb-1">Collection Cover Image</p>
+          <p class="ml-2 text-xl mb-1">{{ $strings.HeaderCover }}</p>
         </div>
-        <div class="flex mb-4">
-          <ui-btn small class="mr-2">Upload</ui-btn>
-          <ui-text-input v-model="newCoverImage" class="grow" placeholder="Collection Cover Image" />
-        </div>
-        <div class="flex justify-end">
-          <ui-btn color="bg-success">Upload</ui-btn>
+        <div class="flex flex-wrap">
+          <div class="w-full flex justify-center mb-4 md:w-auto md:block">
+            <div v-if="previewUpload" class="relative bg-primary rounded-xs overflow-hidden" :style="{ width: '200px', height: 100 * bookCoverAspectRatio + 'px' }">
+              <img :src="previewUpload" class="w-full h-full object-contain" />
+            </div>
+            <covers-collection-cover v-else :book-items="books" :collection="currentCollection" :width="200" :height="100 * bookCoverAspectRatio" :book-cover-aspect-ratio="bookCoverAspectRatio" />
+          </div>
+          <div class="grow md:px-4">
+            <div v-if="previewUpload" class="flex justify-end">
+              <ui-btn type="button" class="mr-2" @click="resetCoverPreview">{{ $strings.ButtonReset }}</ui-btn>
+              <ui-btn type="button" color="bg-success" @click="submitCoverUpload">{{ $strings.ButtonUpload }}</ui-btn>
+            </div>
+            <template v-else>
+              <div v-if="userCanUpload" class="flex items-center mb-4">
+                <div class="w-10 md:w-40 pr-2 md:min-w-32">
+                  <ui-file-input ref="fileInput" @change="fileUploadSelected">
+                    <span class="hidden md:inline-block">{{ $strings.ButtonUploadCover }}</span>
+                    <span class="material-symbols text-2xl inline-block md:hidden!">upload</span>
+                  </ui-file-input>
+                </div>
+                <form @submit.prevent="submitCoverUrl" class="flex grow">
+                  <ui-text-input v-model="imageUrl" :placeholder="$strings.LabelImageURLFromTheWeb" class="h-9 w-full" />
+                  <ui-btn color="bg-success" type="submit" :padding-x="4" :disabled="!imageUrl" class="ml-2 sm:ml-3 w-24 h-9">{{ $strings.ButtonSubmit }}</ui-btn>
+                </form>
+              </div>
+              <ui-btn v-if="hasOwnCover" small color="bg-error" type="button" @click="removeCover">{{ $strings.LabelRemoveCover }}</ui-btn>
+            </template>
+          </div>
         </div>
       </template>
     </div>
@@ -51,7 +77,11 @@ export default {
       processing: false,
       newCollectionName: null,
       newCollectionDescription: null,
-      showImageUploader: false
+      showImageUploader: false,
+      updatedCollection: null,
+      imageUrl: '',
+      previewUpload: null,
+      selectedFile: null
     }
   },
   watch: {
@@ -78,6 +108,13 @@ export default {
     collection() {
       return this.$store.state.globals.selectedCollection || {}
     },
+    currentCollection() {
+      // Collection is refetched after the cover was changed
+      return this.updatedCollection || this.collection
+    },
+    hasOwnCover() {
+      return !!this.currentCollection.coverPath
+    },
     collectionName() {
       return this.collection.name
     },
@@ -86,12 +123,73 @@ export default {
     },
     userCanDelete() {
       return this.$store.getters['user/getUserCanDelete']
+    },
+    userCanUpload() {
+      return this.$store.getters['user/getUserCanUpload']
     }
   },
   methods: {
     init() {
       this.newCollectionName = this.collectionName
       this.newCollectionDescription = this.collection.description || ''
+      this.showImageUploader = false
+      this.updatedCollection = null
+      this.imageUrl = ''
+      this.resetCoverPreview()
+    },
+    async refreshCollection() {
+      const collection = await this.$axios.$get(`/api/collections/${this.collection.id}`).catch((error) => {
+        console.error('Failed to get collection', error)
+        return null
+      })
+      if (collection) this.updatedCollection = collection
+    },
+    fileUploadSelected(file) {
+      this.previewUpload = URL.createObjectURL(file)
+      this.selectedFile = file
+    },
+    resetCoverPreview() {
+      if (this.$refs.fileInput) {
+        this.$refs.fileInput.reset()
+      }
+      if (this.previewUpload) URL.revokeObjectURL(this.previewUpload)
+      this.previewUpload = null
+      this.selectedFile = null
+    },
+    submitCoverUpload() {
+      const form = new FormData()
+      form.set('cover', this.selectedFile)
+      this.updateCover(form)
+    },
+    submitCoverUrl() {
+      if (!this.imageUrl.startsWith('http:') && !this.imageUrl.startsWith('https:')) {
+        return this.$toast.error(this.$strings.ToastInvalidUrl)
+      }
+      this.updateCover({ url: this.imageUrl })
+    },
+    async updateCover(payload) {
+      this.processing = true
+      try {
+        await this.$axios.$post(`/api/collections/${this.collection.id}/cover`, payload)
+        this.imageUrl = ''
+        this.resetCoverPreview()
+        await this.refreshCollection()
+      } catch (error) {
+        console.error('Failed to update collection cover', error)
+        this.$toast.error(error.response?.data || this.$strings.ToastCoverUpdateFailed)
+      }
+      this.processing = false
+    },
+    async removeCover() {
+      this.processing = true
+      try {
+        await this.$axios.$delete(`/api/collections/${this.collection.id}/cover`)
+        await this.refreshCollection()
+      } catch (error) {
+        console.error('Failed to remove collection cover', error)
+        this.$toast.error(error.response?.data || this.$strings.ToastRemoveFailed)
+      }
+      this.processing = false
     },
     removeClick() {
       const payload = {

@@ -188,5 +188,42 @@ class CacheManager {
     var readStream = fs.createReadStream(writtenFile)
     readStream.pipe(res)
   }
+
+  /**
+   *
+   * @param {import('express').Response} res
+   * @param {String} collectionId
+   * @param {{ format?: string, width?: number, height?: number }} options
+   * @returns
+   */
+  async handleCollectionCoverCache(res, collectionId, options = {}) {
+    const format = options.format || 'webp'
+    const width = options.width || 400
+    const height = options.height || null
+
+    if (!['webp', 'jpeg', 'png'].includes(format) || !isUUID(collectionId) || !isValidCacheDimension(width) || (height !== null && !isValidCacheDimension(height))) {
+      return res.sendStatus(400)
+    }
+
+    const cachePath = Path.join(this.ImageCachePath, `${collectionId}_${width}${height ? `x${height}` : ''}`) + '.' + format
+
+    if (!(await fs.pathExists(cachePath))) {
+      const collection = await Database.collectionModel.findByPk(collectionId, { attributes: ['coverPath'] })
+      if (!collection?.coverPath || !(await fs.pathExists(collection.coverPath))) {
+        return res.sendStatus(404)
+      }
+
+      const writtenFile = await resizeImage(collection.coverPath, cachePath, width, height)
+      if (!writtenFile) return res.sendStatus(500)
+    }
+
+    res.type(`image/${format}`)
+    if (global.XAccel) {
+      const encodedURI = encodeUriPath(global.XAccel + cachePath)
+      Logger.debug(`Use X-Accel to serve static file ${encodedURI}`)
+      return res.status(204).header({ 'X-Accel-Redirect': encodedURI }).send()
+    }
+    return res.sendFile(Path.resolve(cachePath))
+  }
 }
 module.exports = new CacheManager()

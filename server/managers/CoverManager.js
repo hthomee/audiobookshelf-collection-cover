@@ -343,5 +343,73 @@ class CoverManager {
       }
     }
   }
+
+  /**
+   * Directory where the custom cover of a collection is stored
+   *
+   * @param {string} collectionId
+   * @returns {string}
+   */
+  getCollectionCoverDirectory(collectionId) {
+    return Path.posix.join(global.MetadataPath, 'collections', collectionId)
+  }
+
+  /**
+   * Save a custom collection cover from an uploaded file or from a url
+   *
+   * @param {string} collectionId
+   * @param {{ file?: *, url?: string }} source - file object from req.files or image url
+   * @returns {Promise<{error:string}|{cover:string}>}
+   */
+  async saveCollectionCover(collectionId, { file, url }) {
+    const coverDirPath = this.getCollectionCoverDirectory(collectionId)
+    await fs.ensureDir(coverDirPath)
+
+    // Save to temp path first, the extension is set from the detected image type
+    const temppath = Path.posix.join(coverDirPath, 'cover')
+    try {
+      if (file) {
+        await file.mv(temppath)
+      } else {
+        await downloadImageFile(url, temppath)
+      }
+    } catch (error) {
+      Logger.error(`[CoverManager] Failed to save collection cover for "${collectionId}"`, error)
+      return {
+        error: file ? 'Failed to move cover into destination' : 'Failed to download image from url'
+      }
+    }
+
+    const imgtype = await this.checkFileIsValidImage(temppath, true)
+    if (imgtype.error) {
+      return imgtype
+    }
+
+    const coverFullPath = Path.posix.join(coverDirPath, `cover.${imgtype.ext}`)
+    await fs.rename(temppath, coverFullPath)
+
+    await this.removeOldCovers(coverDirPath, '.' + imgtype.ext)
+    await CacheManager.purgeImageCache(collectionId)
+
+    Logger.info(`[CoverManager] Saved collection cover "${coverFullPath}"`)
+    return {
+      cover: coverFullPath
+    }
+  }
+
+  /**
+   * Remove custom collection cover directory and cached images
+   *
+   * @param {string} collectionId
+   */
+  async removeCollectionCover(collectionId) {
+    await CacheManager.purgeImageCache(collectionId)
+    const coverDirPath = this.getCollectionCoverDirectory(collectionId)
+    if (await fs.pathExists(coverDirPath)) {
+      await fs.remove(coverDirPath).catch((error) => {
+        Logger.error(`[CoverManager] Failed to remove collection cover dir "${coverDirPath}"`, error)
+      })
+    }
+  }
 }
 module.exports = new CoverManager()
