@@ -19,6 +19,7 @@ const Scanner = require('../scanner/Scanner')
 const Database = require('../Database')
 const Watcher = require('../Watcher')
 const RssFeedManager = require('../managers/RssFeedManager')
+const CoverManager = require('../managers/CoverManager')
 
 const libraryFilters = require('../utils/queries/libraryFilters')
 const libraryItemsPodcastFilters = require('../utils/queries/libraryItemsPodcastFilters')
@@ -532,6 +533,18 @@ class LibraryController {
     Watcher.removeLibrary(req.library)
 
     // Remove collections for library
+    const collectionsWithCover = await Database.collectionModel.findAll({
+      where: {
+        libraryId: req.library.id,
+        coverPath: {
+          [Sequelize.Op.ne]: null
+        }
+      },
+      attributes: ['id']
+    })
+    for (const collection of collectionsWithCover) {
+      await CoverManager.removeCollectionCover(collection.id)
+    }
     const numCollectionsRemoved = await Database.collectionModel.removeAllForLibrary(req.library.id)
     if (numCollectionsRemoved) {
       Logger.info(`[Server] Removed ${numCollectionsRemoved} collections for library "${req.library.name}"`)
