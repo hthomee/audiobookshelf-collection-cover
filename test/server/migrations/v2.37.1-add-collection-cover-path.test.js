@@ -5,9 +5,9 @@ const { expect } = chai
 const { DataTypes, Sequelize } = require('sequelize')
 const Logger = require('../../../server/Logger')
 
-const { up, down } = require('../../../server/migrations/v2.38.0-add-collection-cover-path')
+const { up, down } = require('../../../server/migrations/v2.37.1-add-collection-cover-path')
 
-describe('Migration v2.38.0-add-collection-cover-path', () => {
+describe('Migration v2.37.1-add-collection-cover-path', () => {
   let sequelize
   let queryInterface
   let loggerInfoStub
@@ -43,9 +43,9 @@ describe('Migration v2.38.0-add-collection-cover-path', () => {
       const [rows] = await sequelize.query('SELECT name, coverPath FROM collections')
       expect(rows).to.deep.equal([{ name: 'Existing', coverPath: null }])
 
-      expect(loggerInfoStub.calledWith('[2.38.0 migration] UPGRADE BEGIN: 2.38.0-add-collection-cover-path')).to.be.true
-      expect(loggerInfoStub.calledWith('[2.38.0 migration] Added coverPath column to collections table')).to.be.true
-      expect(loggerInfoStub.calledWith('[2.38.0 migration] UPGRADE END: 2.38.0-add-collection-cover-path')).to.be.true
+      expect(loggerInfoStub.calledWith('[2.37.1 migration] UPGRADE BEGIN: 2.37.1-add-collection-cover-path')).to.be.true
+      expect(loggerInfoStub.calledWith('[2.37.1 migration] Added coverPath column to collections table')).to.be.true
+      expect(loggerInfoStub.calledWith('[2.37.1 migration] UPGRADE END: 2.37.1-add-collection-cover-path')).to.be.true
     })
 
     it('should be idempotent', async () => {
@@ -54,7 +54,7 @@ describe('Migration v2.38.0-add-collection-cover-path', () => {
 
       const tableDescription = await queryInterface.describeTable('collections')
       expect(tableDescription.coverPath).to.exist
-      expect(loggerInfoStub.calledWith('[2.38.0 migration] coverPath column already exists in collections table')).to.be.true
+      expect(loggerInfoStub.calledWith('[2.37.1 migration] coverPath column already exists in collections table')).to.be.true
     })
   })
 
@@ -69,9 +69,9 @@ describe('Migration v2.38.0-add-collection-cover-path', () => {
       const [rows] = await sequelize.query('SELECT name FROM collections')
       expect(rows).to.deep.equal([{ name: 'Existing' }])
 
-      expect(loggerInfoStub.calledWith('[2.38.0 migration] DOWNGRADE BEGIN: 2.38.0-add-collection-cover-path')).to.be.true
-      expect(loggerInfoStub.calledWith('[2.38.0 migration] Removed coverPath column from collections table')).to.be.true
-      expect(loggerInfoStub.calledWith('[2.38.0 migration] DOWNGRADE END: 2.38.0-add-collection-cover-path')).to.be.true
+      expect(loggerInfoStub.calledWith('[2.37.1 migration] DOWNGRADE BEGIN: 2.37.1-add-collection-cover-path')).to.be.true
+      expect(loggerInfoStub.calledWith('[2.37.1 migration] Removed coverPath column from collections table')).to.be.true
+      expect(loggerInfoStub.calledWith('[2.37.1 migration] DOWNGRADE END: 2.37.1-add-collection-cover-path')).to.be.true
     })
 
     it('should be idempotent', async () => {
@@ -79,7 +79,7 @@ describe('Migration v2.38.0-add-collection-cover-path', () => {
 
       const tableDescription = await queryInterface.describeTable('collections')
       expect(tableDescription.coverPath).to.not.exist
-      expect(loggerInfoStub.calledWith('[2.38.0 migration] coverPath column does not exist in collections table')).to.be.true
+      expect(loggerInfoStub.calledWith('[2.37.1 migration] coverPath column does not exist in collections table')).to.be.true
     })
   })
 })

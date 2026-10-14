@@ -7,7 +7,7 @@
  * @property {MigrationContext} context - an object containing the migration context.
  */
 
-const migrationVersion = '2.38.0'
+const migrationVersion = '2.37.1'
 const migrationName = `${migrationVersion}-add-collection-cover-path`
 const loggerPrefix = `[${migrationVersion} migration]`
 
