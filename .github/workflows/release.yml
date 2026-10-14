@@ -1,0 +1,290 @@
+# Build Audiobookshelf releases with the collection-cover patches.
+#
+# Once a day this workflow looks for new stable upstream releases (advplyr/audiobookshelf, tags vX.Y.Z),
+# applies the two patch branches on top of the tag, runs lint + unit tests, smoke-tests the Docker image
+# and pushes it to GitHub Container Registry:
+#
+#   ghcr.io/<owner>/audiobookshelf-collection-cover:v2.37.1     (upstream tag, multi-arch amd64+arm64)
+#   ghcr.io/<owner>/audiobookshelf-collection-cover:v2.37.1-amd64 / -arm64 (per architecture, built natively)
+#   ghcr.io/<owner>/audiobookshelf-collection-cover:2.37.1      (same, without "v")
+#   ghcr.io/<owner>/audiobookshelf-collection-cover:latest      (only for the newest upstream release)
+#
+# If a patch no longer applies, or tests/build fail, it opens an issue instead (one per tag, no duplicates).
+#
+# Setup notes (one time): the default branch of the fork must be `main` (scheduled workflows only run from
+# the default branch), Actions must be enabled, and the package `audiobookshelf-collection-cover` has to be
+# public if the image should be pulled without login. `MIN_VERSION` below decides from which release on
+# images are built; older tags are never touched.
+#
+# Why not build on push? The upstream tags live in advplyr's repository, so there is no push event for a
+# new release; the daily poll (git ls-remote) is the trigger.
+#
+# Patch branch convention: each patch branch (feature/*) holds its commits directly on top of upstream
+# master. All commits between merge-base(upstream/master, branch) and the branch tip are cherry-picked
+# onto the release tag. The migration is renamed to the release version by
+# .github/scripts/set-migration-version.sh, because ABS only runs migrations with
+# DB version < migration version <= package.json version.
+
+name: Release images
+
+on:
+  schedule:
+    - cron: '23 4 * * *' # daily, 04:23 UTC
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Upstream tag to (re)build, e.g. v2.37.1. Empty = all new releases.'
+        required: false
+        default: ''
+      force:
+        description: 'Build even if the image already exists'
+        type: boolean
+        default: false
+
+# never two runs at once (they would race for the same tags)
+concurrency:
+  group: release-images
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+  issues: write
+  actions: write # keepalive step below
+
+env:
+  UPSTREAM_URL: https://github.com/advplyr/audiobookshelf.git
+  MIN_VERSION: '2.37.1' # oldest upstream release that is built
+  MAX_TAGS: '3' # at most this many new releases per run
+  IMAGE_NAME: audiobookshelf-collection-cover
+  PATCH_BRANCHES: origin/feature/collection-cover origin/feature/new-collection-button
+  BASE_REF: upstream/master
+
+jobs:
+  discover:
+    name: Find new upstream releases
+    # never run in advplyr's own repository
+    if: github.repository_owner != 'advplyr'
+    runs-on: ubuntu-24.04
+    outputs:
+      tags: ${{ steps.find.outputs.tags }}
+      newest: ${{ steps.find.outputs.newest }}
+      image: ${{ steps.find.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # GitHub disables scheduled workflows of public repositories after 60 days without repository
+      # activity. Re-enabling the workflow on every run resets that timer, so the daily poll keeps going.
+      - name: Keep the schedule alive
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow enable release.yml --repo "$GITHUB_REPOSITORY" || echo "could not re-enable (ignored)"
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Find releases without image
+        id: find
+        env:
+          ONLY_TAG: ${{ inputs.tag }}
+          FORCE: ${{ inputs.force && '1' || '' }}
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          export IMAGE="ghcr.io/${owner}/${IMAGE_NAME}"
+          tags="$(.github/scripts/new-tags.sh)"
+          newest="$(git ls-remote --tags --refs "$UPSTREAM_URL" 'refs/tags/v*' | sed -E 's#.*refs/tags/##' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)"
+          echo "new tags: ${tags:-none}; newest upstream: ${newest}"
+          echo "tags=$(printf '%s\n' "$tags" | jq -R -s -c 'split("\n") | map(select(length > 0))')" >> "$GITHUB_OUTPUT"
+          echo "newest=${newest}" >> "$GITHUB_OUTPUT"
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.tag }} (${{ matrix.arch }})
+    needs: discover
+    if: needs.discover.outputs.tags != '[]'
+    # each architecture is built natively (no QEMU: Node crashes under emulation)
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        tag: ${{ fromJSON(needs.discover.outputs.tags) }}
+        arch: [amd64, arm64]
+    env:
+      TAG: ${{ matrix.tag }}
+      ARCH: ${{ matrix.arch }}
+      IMAGE: ${{ needs.discover.outputs.image }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # needs the feature/* branches including their merge base
+
+      # The scripts are copied away: checking out the upstream tag below replaces the working tree,
+      # and the tag does not contain .github/scripts/.
+      - name: Keep helper scripts
+        run: cp -r .github/scripts "$RUNNER_TEMP/scripts"
+
+      # cherry-pick needs a committer identity
+      - name: Configure git identity
+        run: |
+          git config --global user.name "release-bot"
+          git config --global user.email "release-bot@users.noreply.github.com"
+
+      - name: Fetch upstream tag
+        run: |
+          git remote add upstream "$UPSTREAM_URL"
+          git fetch --no-tags upstream "+refs/heads/master:refs/remotes/upstream/master" "refs/tags/${TAG}:refs/tags/${TAG}"
+
+      - name: Apply patches to ${{ matrix.tag }}
+        id: patch
+        run: |
+          set +e
+          "$RUNNER_TEMP/scripts/apply-patches.sh" "$TAG"
+          rc=$?
+          set -e
+          if [ "$rc" -eq 2 ]; then
+            echo "conflict=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          exit "$rc"
+
+      - name: Open issue (patch conflict)
+        if: steps.patch.outputs.conflict == 'true'
+        run: |
+          {
+            echo "The collection-cover patches do not apply to upstream release **${TAG}**, so no image was built."
+            echo
+            cat "${RUNNER_TEMP}/patch-conflict.md"
+            echo
+            echo "How to fix: see section \"Maintenance\" in docs/FORK.md."
+            echo "Rebase the \`feature/*\` branch onto the new upstream master (or resolve locally on a \`release/${TAG}\` branch), push, then run this workflow again with \`tag: ${TAG}\`."
+            echo
+            echo "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } > "${RUNNER_TEMP}/issue.md"
+          "$RUNNER_TEMP/scripts/open-issue.sh" "Patches do not apply to ${TAG}" "${RUNNER_TEMP}/issue.md"
+          exit 1 # mark the job red
+
+      # Lint and unit tests do not depend on the architecture: run them once.
+      - name: Set up Node.js
+        if: matrix.arch == 'amd64'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        if: matrix.arch == 'amd64'
+        run: npm ci
+
+      - name: Lint
+        if: matrix.arch == 'amd64'
+        run: npm run lint
+
+      - name: Unit tests (incl. the patch tests)
+        if: matrix.arch == 'amd64'
+        run: npm test
+
+      - name: Export patch series
+        if: matrix.arch == 'amd64'
+        run: git format-patch -o "$RUNNER_TEMP/series" "refs/tags/${TAG}..HEAD"
+
+      - name: Upload patch series
+        if: matrix.arch == 'amd64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: collcover-patches-${{ matrix.tag }}
+          path: ${{ runner.temp }}/series
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Native build, kept in the runner, smoke-tested before anything is pushed.
+      - name: Build image (${{ matrix.arch }})
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: collcover-smoke:${{ matrix.tag }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.description=Audiobookshelf ${{ matrix.tag }} with collection cover patches (unofficial fork, collection covers)
+            org.opencontainers.image.version=${{ matrix.tag }}
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+
+      - name: Smoke test
+        run: |
+          docker run -d --name abs-smoke -p 13378:80 \
+            -v "$RUNNER_TEMP/abs-config:/config" -v "$RUNNER_TEMP/abs-metadata:/metadata" \
+            "collcover-smoke:${TAG}"
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:13378/healthcheck >/dev/null; then ok=1; break; fi
+            sleep 2
+          done
+          docker logs abs-smoke | tail -20
+          docker rm -f abs-smoke
+          test "${ok:-}" = "1"
+
+      - name: Push ${{ matrix.tag }}-${{ matrix.arch }}
+        run: |
+          docker tag "collcover-smoke:${TAG}" "${IMAGE}:${TAG}-${ARCH}"
+          docker push "${IMAGE}:${TAG}-${ARCH}"
+
+      - name: Open issue (tests or build failed)
+        if: failure() && steps.patch.outputs.conflict != 'true'
+        run: |
+          {
+            echo "The patches apply to upstream release **${TAG}**, but lint, tests, the Docker build or the smoke test failed (${ARCH}). No image was pushed for this architecture."
+            echo
+            echo "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } > "${RUNNER_TEMP}/issue.md"
+          "$RUNNER_TEMP/scripts/open-issue.sh" "Build failed for ${TAG} (${ARCH})" "${RUNNER_TEMP}/issue.md"
+
+  # One multi-arch tag per release, only if both architectures were built.
+  manifest:
+    name: Publish ${{ matrix.tag }}
+    needs: [discover, build]
+    if: always() && needs.discover.outputs.tags != '[]'
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        tag: ${{ fromJSON(needs.discover.outputs.tags) }}
+    env:
+      TAG: ${{ matrix.tag }}
+      IMAGE: ${{ needs.discover.outputs.image }}
+      NEWEST: ${{ needs.discover.outputs.newest }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create multi-arch tags
+        run: |
+          for a in amd64 arm64; do
+            if ! docker buildx imagetools inspect "${IMAGE}:${TAG}-${a}" >/dev/null 2>&1; then
+              echo "no ${a} image for ${TAG}, nothing published"
+              exit 0
+            fi
+          done
+          version="${TAG#v}"
+          args=(-t "${IMAGE}:${TAG}" -t "${IMAGE}:${version}")
+          if [ "$TAG" = "$NEWEST" ]; then args+=(-t "${IMAGE}:latest"); fi
+          docker buildx imagetools create "${args[@]}" "${IMAGE}:${TAG}-amd64" "${IMAGE}:${TAG}-arm64"
+          docker buildx imagetools inspect "${IMAGE}:${TAG}"
