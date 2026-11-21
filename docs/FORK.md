@@ -19,7 +19,7 @@ Nothing else is changed. Everything else is exactly Audiobookshelf.
 
 ## Changed files
 
-Collection cover (server): migration `…-add-collection-cover-path` (nullable `collections.coverPath`, idempotent, with `down`), `models/Collection.js`, `controllers/CollectionController.js` (`uploadCover`, `removeCover`, `getCover`), `managers/CoverManager.js`, `managers/CacheManager.js`, `routers/ApiRouter.js`, `Auth.js` (cover GET without login, like item covers), `controllers/LibraryController.js` (covers are removed with the library).
+Collection cover (server): migration `…-add-collection-cover-path` (nullable `collections.coverPath`, idempotent, with `down`), `models/Collection.js`, `controllers/CollectionController.js` (`uploadCover`, `removeCover`, `getCover`), `managers/CoverManager.js`, `managers/CacheManager.js`, `routers/ApiRouter.js` (the upload route runs `requireUploadPermission` and `fileUploadParser` after the collection middleware, like the item cover upload), `Auth.js` (cover GET without login, like item covers), `controllers/LibraryController.js` (covers are removed with the library).
 
 Collection cover (client): `components/covers/CollectionCover.vue` (shows the own cover, falls back to the collage), `components/modals/collections/EditModal.vue` (cover view: upload, URL, remove), small pass-through changes in `LazyCollectionCard.vue`, `CollectionItem.vue`, `pages/collection/_id.vue`.
 
@@ -75,7 +75,7 @@ Things to check for each release:
 
 1. **Migration name.** Audiobookshelf runs a migration only if old DB version < migration version <= `version` in `package.json`. `set-migration-version.sh <x.y.z>` renames file, test, changelog line and version strings accordingly.
 2. **Upstream migrations.** A new upstream migration is normal; only one touching `collections.coverPath` would be a problem.
-3. **Conflicts** are most likely in `CollectionController.js`, `CacheManager.js`, `CoverManager.js`, `Auth.js` and `EditModal.vue`. Upstream is reworking the collection API, so expect changes there.
+3. **Conflicts** are most likely in `CollectionController.js`, `CacheManager.js`, `CoverManager.js`, `Auth.js` and `EditModal.vue`. Upstream is reworking the collection API, so expect changes there. Follow upstream's patterns in the cover endpoints too: since v2.38.0 collection socket events go only to the requesting user (`getOldJsonExpanded(req.user)` + `SocketAuthority.clientEmitter`), and multipart bodies are parsed per route (`fileUploadParser`), not globally. A cherry-pick that applies cleanly can still break uploads silently; the HTTP upload test catches that.
 4. **Upstream may have the feature by then.** Check issue #2589; in that case drop the patch and use the original image.
 
 ## Going back to the original image
@@ -84,4 +84,4 @@ Back up first (Settings → Backups, plus a copy of `absdatabase.sqlite`). When 
 
 ## Tests
 
-Unit tests: 15 controller tests and 4 migration tests for the cover, 2 for the empty collection (`test/server/…`). Also run against real containers: a database created with the original release, upgrade, upload/replace/remove covers, delete collection, error cases (not an image: 400, invalid id: 400, no cover: 404).
+Unit tests: 18 controller tests in `test/server/controllers/CollectionCover.test.js` (including a real multipart upload over HTTP through the API router) and 4 migration tests for the cover, 2 for the empty collection in `CollectionControllerCreate.test.js`. They live in their own files so they do not collide with upstream's `CollectionController.test.js`. Also run against real containers: a database created with the original release, upgrade, upload/replace/remove covers, delete collection, error cases (not an image: 400, invalid id: 400, no cover: 404).
